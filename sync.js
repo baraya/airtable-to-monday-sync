@@ -3,23 +3,38 @@ const fs = require('fs');
 const axios = require('axios');
 const path = require('path');
 
+// === ENV CONFIG ===
 const airtableToken = process.env.AIRTABLE_PAT;
 const airtableBaseId = process.env.AIRTABLE_BASE_ID;
 const airtableTable = process.env.AIRTABLE_TABLE_NAME;
+
 const mondayApiKey = process.env.MONDAY_API_KEY;
 const mondayBoardId = process.env.MONDAY_BOARD_ID;
-const mondayStatusColumnId = process.env.MONDAY_STATUS_COLUMN_ID || 'status'; // use actual ID
+const mondayGroupId = process.env.MONDAY_GROUP_ID;
+const mondayStatusColumnId = process.env.MONDAY_STATUS_COLUMN_ID || 'status';
+const mondayClientColumnId = process.env.MONDAY_CLIENT_COLUMN_ID || 'dropdown_mkqahzp5';
 
 const cachePath = path.resolve(__dirname, 'synced.json');
 let syncedRecords = [];
 
+// === STATUS MAP (Airtable → Monday) ===
 const statusMap = {
-  'To Do': 'To Do',
-  'In Progress': 'Working on it',
-  Done: 'Done',
-  'In QA': 'QA',
+    'To Do': 'To Do',
+    'In Progress': 'Working on it',
+    'Completed': 'Done',
+    'Canceled': 'Canceled',
+  };  
+
+// === CLIENT MAP (Airtable → Monday Dropdown) ===
+const clientDropdownMap = {
+  '1172 Napoli': 'Napoli',
+  "428 Carmelina": 'Carmelina',
+  'Carla Ridge': 'Carla Ridge',
+  '21ST Street': '21st',
+  'Fishbar Holdings': 'FISHBAR'
 };
 
+// === Cache Helpers ===
 function loadCache() {
   if (fs.existsSync(cachePath)) {
     try {
@@ -39,6 +54,7 @@ function saveCache() {
   console.log(`✅ Saved ${syncedRecords.length} records to synced.json`);
 }
 
+// === Airtable ===
 async function fetchAirtableRecords() {
   const url = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(airtableTable)}`;
   const response = await axios.get(url, {
@@ -49,47 +65,27 @@ async function fetchAirtableRecords() {
   return response.data.records;
 }
 
-async function createMondayItem(itemName, statusLabel) {
-  const groupId = process.env.MONDAY_GROUP_ID;
+// === Monday.com ===
+async function createMondayItem(itemName, statusLabel, clientLabels) {
+  const columnValuesObject = {
+    ...(statusLabel && { [mondayStatusColumnId]: { label: statusLabel } }),
+    ...(clientLabels.length > 0 && {
+      [mondayClientColumnId]: { labels: clientLabels }
+    })
+  };
 
-  const columnValues = statusLabel ? JSON.stringify({ [mondayStatusColumnId]: { label: statusLabel } }) : null;
+  const columnValues = Object.keys(columnValuesObject).length
+    ? JSON.stringify(columnValuesObject)
+    : null;
 
-  const query = `
-      mutation {
-        create_item (
-          board_id: ${mondayBoardId},
-          group_id: ${JSON.stringify(groupId)},
-          item_name: ${JSON.stringify(itemName)}${
-    columnValues ? `, column_values: ${JSON.stringify(columnValues)}` : ''
-  }
-        ) {
-          id
-        }
-      }
-    `;
-
-  const response = await axios.post(
-    'https://api.monday.com/v2',
-    { query },
-    {
-      headers: {
-        Authorization: mondayApiKey,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-
-  return response.data?.data?.create_item?.id;
-}
-
-async function updateMondayStatus(itemId, statusLabel) {
   const query = `
     mutation {
-      change_column_value (
+      create_item (
         board_id: ${mondayBoardId},
-        item_id: ${itemId},
-        column_id: ${JSON.stringify(mondayStatusColumnId)},
-        value: ${JSON.stringify(JSON.stringify({ label: statusLabel }))}
+        group_id: ${JSON.stringify(mondayGroupId)},
+        item_name: ${JSON.stringify(itemName)}${
+          columnValues ? `, column_values: ${JSON.stringify(columnValues)}` : ''
+        }
       ) {
         id
       }
@@ -107,9 +103,10 @@ async function updateMondayStatus(itemId, statusLabel) {
     }
   );
 
-  return response.data?.data?.change_column_value?.id;
+  return response.data?.data?.create_item?.id;
 }
 
+// === Sync Logic ===
 (async () => {
   try {
     loadCache();
@@ -118,35 +115,37 @@ async function updateMondayStatus(itemId, statusLabel) {
     for (const record of records) {
       const { id: airtableId, fields } = record;
       const task = fields['Task'];
+      if (!task) continue;
+
+      // --- Status ---
       const airtableStatus = fields['Status']?.name || fields['Status'];
       const mappedStatus = statusMap[airtableStatus] || null;
 
-      if (!task) continue;
+      // --- Client Dropdown ---
+      const clientNames = fields['Client Name Label'] || [];
+      const mappedClientLabels = Array.isArray(clientNames)
+        ? clientNames.map(name => clientDropdownMap[name]).filter(Boolean)
+        : clientDropdownMap[clientNames]
+          ? [clientDropdownMap[clientNames]]
+          : [];
+      
+      
+      // --- Skip if already synced ---
+      const alreadySynced = syncedRecords.find(r => r.airtable_id === airtableId);
+      if (alreadySynced) {
+        console.log(`⏩ Skipped "${task}" — already synced`);
+        continue;
+      }
 
-      const existing = syncedRecords.find((r) => r.airtable_id === airtableId);
-
-      if (!existing) {
-        // Create new item
-        console.log(`🆕 Creating: "${task}"`);
-        const mondayId = await createMondayItem(task, mappedStatus);
-        if (mondayId) {
-          syncedRecords.push({
-            airtable_id: airtableId,
-            monday_id: mondayId,
-            last_status: mappedStatus,
-          });
-          console.log(`✅ Created Monday item ${mondayId}`);
-        }
-      } else {
-        // Item already exists — check if status changed
-        if (mappedStatus && mappedStatus !== existing.last_status) {
-          console.log(`🔁 Updating status of "${task}" to "${mappedStatus}"`);
-          await updateMondayStatus(existing.monday_id, mappedStatus);
-          existing.last_status = mappedStatus;
-          console.log(`✅ Updated Monday item ${existing.monday_id}`);
-        } else {
-          console.log(`⏩ Skipped "${task}" — no changes`);
-        }
+      // --- Create Item ---
+      console.log(`🆕 Creating: "${task}"`);
+      const mondayId = await createMondayItem(task, mappedStatus, mappedClientLabels);
+      if (mondayId) {
+        syncedRecords.push({
+          airtable_id: airtableId,
+          monday_id: mondayId
+        });
+        console.log(`✅ Created Monday item ${mondayId}`);
       }
     }
 
