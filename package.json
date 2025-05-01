@@ -1,0 +1,24 @@
+{
+  "name": "airtable-to-monday-sync",
+  "version": "1.0.0",
+  "description": "",
+  "main": "sync.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baraya/airtable-to-monday-sync.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/baraya/airtable-to-monday-sync/issues"
+  },
+  "homepage": "https://github.com/baraya/airtable-to-monday-sync#readme",
+  "dependencies": {
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0"
+  }
+}

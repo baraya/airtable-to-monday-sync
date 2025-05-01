@@ -1,19 +1,51 @@
 // sync.js
-const axios = require('axios');
+require('dotenv').config(); // Load local .env variables
 
-const airtableApiKey = process.env.AIRTABLE_API_KEY;
+const fs = require('fs');
+const axios = require('axios');
+const path = require('path');
+
+const airtableToken = process.env.AIRTABLE_PAT;
 const airtableBaseId = process.env.AIRTABLE_BASE_ID;
 const airtableTable = process.env.AIRTABLE_TABLE_NAME;
 const mondayApiKey = process.env.MONDAY_API_KEY;
 const mondayBoardId = process.env.MONDAY_BOARD_ID;
 
-// Airtable config
-const airtableUrl = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(airtableTable)}`;
+if (!airtableToken || !airtableBaseId || !airtableTable || !mondayApiKey || !mondayBoardId) {
+  console.error("❌ Missing one or more required environment variables.");
+  process.exit(1);
+}
+
+const cachePath = path.resolve(__dirname, 'synced.json');
+let syncedIds = new Set();
+
+function loadSyncedIds() {
+  if (fs.existsSync(cachePath)) {
+    try {
+      const data = fs.readFileSync(cachePath, 'utf8');
+      const ids = JSON.parse(data);
+      syncedIds = new Set(ids);
+      console.log(`Loaded ${syncedIds.size} synced IDs`);
+    } catch (err) {
+      console.error('Failed to parse synced.json:', err.message);
+      process.exit(1);
+    }
+  } else {
+    console.log('No existing synced.json found, starting fresh');
+  }
+}
+
+function saveSyncedIds() {
+  const list = Array.from(syncedIds);
+  fs.writeFileSync(cachePath, JSON.stringify(list, null, 2));
+  console.log(`Saved ${list.length} synced IDs to synced.json`);
+}
 
 async function fetchAirtableRecords() {
-  const response = await axios.get(airtableUrl, {
+  const url = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(airtableTable)}`;
+  const response = await axios.get(url, {
     headers: {
-      Authorization: `Bearer ${airtableApiKey}`,
+      Authorization: `Bearer ${airtableToken}`,
     },
   });
   return response.data.records;
@@ -39,25 +71,37 @@ async function createMondayItem(name) {
     }
   );
 
-  return response.data;
+  return response.data?.data?.create_item?.id;
 }
 
 (async () => {
   try {
+    loadSyncedIds();
     const records = await fetchAirtableRecords();
 
-    for (const record of records) {
-      const taskName = record.fields['Task Name'];
-      if (!taskName) continue;
+    let syncedThisRun = 0;
 
-      console.log(`Creating: ${taskName}`);
-      const result = await createMondayItem(taskName);
-      console.log(`Created item ID:`, result.data?.create_item?.id);
+    for (const record of records) {
+      const { id, fields } = record;
+      const taskName = fields['Task Name'];
+
+      if (!taskName || syncedIds.has(id)) {
+        continue;
+      }
+
+      console.log(`Syncing: ${taskName}`);
+      const mondayId = await createMondayItem(taskName);
+      if (mondayId) {
+        syncedIds.add(id);
+        syncedThisRun++;
+        console.log(`✅ Synced and recorded: ${taskName} → Monday ID ${mondayId}`);
+      }
     }
 
-    console.log('Sync complete.');
+    saveSyncedIds();
+    console.log(`🎉 Sync complete. ${syncedThisRun} new tasks created.`);
   } catch (err) {
-    console.error('Error during sync:', err.message);
+    console.error('❌ Sync failed:', err.message);
     process.exit(1);
   }
 })();
