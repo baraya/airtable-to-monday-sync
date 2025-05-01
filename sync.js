@@ -1,5 +1,4 @@
-// sync.js
-require('dotenv').config(); // Load local .env variables
+require('dotenv').config(); // Load local .env if running locally
 
 const fs = require('fs');
 const axios = require('axios');
@@ -15,6 +14,14 @@ if (!airtableToken || !airtableBaseId || !airtableTable || !mondayApiKey || !mon
   console.error("❌ Missing one or more required environment variables.");
   process.exit(1);
 }
+
+// Map Airtable status values to Monday.com status labels
+const statusMap = {
+  'To Do': 'To Do',
+  'In Progress': 'Working on it',
+  'Done': 'Done',
+  'In QA': 'QA' // only include if QA exists in your Monday board
+};
 
 const cachePath = path.resolve(__dirname, 'synced.json');
 let syncedIds = new Set();
@@ -51,10 +58,19 @@ async function fetchAirtableRecords() {
   return response.data.records;
 }
 
-async function createMondayItem(name) {
+async function createMondayItem(itemName, mappedStatus) {
+  const columnValues = mappedStatus
+    ? JSON.stringify({ status: { label: mappedStatus } })
+    : null;
+
   const query = `
     mutation {
-      create_item (board_id: ${mondayBoardId}, item_name: "${name}") {
+      create_item (
+        board_id: ${mondayBoardId},
+        item_name: ${JSON.stringify(itemName)}${
+          columnValues ? `, column_values: ${JSON.stringify(columnValues)}` : ''
+        }
+      ) {
         id
       }
     }
@@ -83,18 +99,23 @@ async function createMondayItem(name) {
 
     for (const record of records) {
       const { id, fields } = record;
-      const taskName = fields['Task Name'];
 
-      if (!taskName || syncedIds.has(id)) {
-        continue;
-      }
+      if (syncedIds.has(id)) continue;
 
-      console.log(`Syncing: ${taskName}`);
-      const mondayId = await createMondayItem(taskName);
+      const task = fields['Task'];
+      if (!task) continue;
+
+      const airtableStatus = fields['Status']?.name || fields['Status'];
+      const mappedStatus = statusMap[airtableStatus] || null;
+
+      console.log(`Creating item: "${task}"${mappedStatus ? ` with status "${mappedStatus}"` : ''}`);
+
+      const mondayId = await createMondayItem(task, mappedStatus);
+
       if (mondayId) {
         syncedIds.add(id);
         syncedThisRun++;
-        console.log(`✅ Synced and recorded: ${taskName} → Monday ID ${mondayId}`);
+        console.log(`✅ Created Monday.com item ID ${mondayId}`);
       }
     }
 
