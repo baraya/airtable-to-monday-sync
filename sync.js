@@ -23,6 +23,7 @@ const statusMap = {
     'In Progress': 'Working on it',
     'Completed': 'Done',
     'Canceled': 'Canceled',
+    'Working on it': 'Working on it',
   };  
 
 // === CLIENT MAP (Airtable → Monday Dropdown) ===
