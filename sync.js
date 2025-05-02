@@ -17,23 +17,15 @@ const mondayClientColumnId = process.env.MONDAY_CLIENT_COLUMN_ID || 'dropdown_mk
 const cachePath = path.resolve(__dirname, 'synced.json');
 let syncedRecords = [];
 
-// === STATUS MAP (Airtable → Monday) ===
-const statusMap = {
-    'To Do': 'To Do',
-    'In Progress': 'Working on it',
-    'Completed': 'Done',
-    'Canceled': 'Canceled',
-    'Working on it': 'Working on it',
-  };  
+let statusMap, clientDropdownMap;
 
-// === CLIENT MAP (Airtable → Monday Dropdown) ===
-const clientDropdownMap = {
-  '1172 Napoli': 'Napoli',
-  "428 Carmelina": 'Carmelina',
-  'Carla Ridge': 'Carla Ridge',
-  '21ST Street': '21st',
-  'Fishbar Holdings': 'FISHBAR'
-};
+try {
+  statusMap = JSON.parse(process.env.STATUS_MAP_JSON || '{}');
+  clientDropdownMap = JSON.parse(process.env.CLIENT_DROPDOWN_MAP_JSON || '{}');
+} catch (err) {
+  console.error('❌ Failed to parse STATUS_MAP_JSON or CLIENT_DROPDOWN_MAP_JSON:', err.message);
+  process.exit(1);
+}
 
 // === Cache Helpers ===
 function loadCache() {
